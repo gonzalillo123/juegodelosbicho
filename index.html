@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Biosfera espacial</title>
+<style>
+:root{--bg:#0b0f13;--panel:rgba(22,30,38,.92);--fg:#dbe4ec;--mut:#8a9aa8;--ac:#58a6ff;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b0f13}}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg:#dfe7df;--panel:rgba(255,255,255,.93);--fg:#1c2a36;--mut:#5b6b78}}
+:root[data-theme="dark"]{--bg:#0b0f13;--panel:rgba(22,30,38,.92);--fg:#dbe4ec;--mut:#8a9aa8}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
+canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+#panel{position:absolute;top:calc(8px + env(safe-area-inset-top,0px));left:8px;width:210px;max-height:calc(100% - 24px);overflow:auto;background:var(--panel);border-radius:10px;padding:10px;box-shadow:0 2px 12px #0006}
+#panel.hide .body{display:none}
+h1{font-size:14px;margin:0;display:flex;justify-content:space-between;align-items:center}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:10px 0 4px}
+.kv{display:flex;justify-content:space-between}.kv span:first-child{color:var(--mut)}
+button{background:var(--ac);color:#fff;border:0;border-radius:6px;padding:5px 9px;font:inherit;cursor:pointer}
+.row{display:flex;gap:6px;margin:8px 0}
+input[type=range]{width:100%}label{display:block}
+.kv button{padding:1px 10px;margin-left:3px}
+#hist{height:56px;background:rgba(127,127,127,.14);border-radius:6px;cursor:default}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
+body{background:#03040c}
+#panel{--fg:#cfe6ff;--mut:#7f93b8;color:#cfe6ff;background:rgba(6,10,28,.8);border:1px solid rgba(90,200,255,.35);backdrop-filter:blur(6px);box-shadow:0 0 22px rgba(60,160,255,.2);font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:12px}
+h1{color:#8fe3ff;letter-spacing:.06em}h2{color:#5aa0f0}
+button{background:linear-gradient(#2a6fe0,#1a47a8);box-shadow:0 0 8px rgba(70,150,255,.4)}
+#banner{position:absolute;top:calc(14px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);padding:8px 18px;border-radius:20px;background:rgba(10,20,50,.85);border:1px solid #5ad0ff;color:#bfeaff;font-weight:700;opacity:0;transition:opacity .4s;pointer-events:none;white-space:nowrap}
+#banner.show{opacity:1}
+</style></head><body>
+<canvas id="c"></canvas><div id="banner"></div>
+<aside id="panel"><h1>🚀 Biosfera espacial <button id="tog">☰</button></h1>
+<div class="body">
+<h2>Estadísticas</h2><div id="stats"></div>
+<h2>Añadir / quitar</h2><div id="add"></div>
+<div class="row"><button id="pause">⏸ Pausa</button><button id="reset">↺ Reiniciar</button></div>
+<div class="row"><button id="mt">☄ Lluvia</button><button id="sun">☀ Tormenta</button></div>
+<label>Velocidad: <b id="spdv">1×</b><input id="spd" type="range" min=".25" max="10" step=".25" value="1"></label>
+<h2>Poblaciones (% del límite)</h2><canvas id="hist" width="380" height="110"></canvas><h2>Debug</h2><div id="dbg"></div>
+<h2>Selección</h2><div id="sel" style="color:var(--mut)">Clic en un organismo. Arrastra: mover · rueda: zoom · Espacio: pausa</div>
+</div></aside>
+<script>
+'use strict';
+/* =====================================================================
+   1. CONFIG — todos los parámetros centralizados
+   ===================================================================== */
+const CONFIG = {
+  world: { width: 1800, height: 1100, cell: 90, step: 1/30, maxStepsPerFrame: 12 },
+  sizing: { exponent: 0.5 }, genes: { mutation: 0.08, min: 0.6, max: 1.6 }, talk: {   // frases con sabor malagueño, versión espacial (originales)
+    eat: ['¡Ozú, qué mineral más rico, quillo!', 'Repostando, illo, repostando', '¡Ahí va, cristal fresquito!', 'Ole, combustible gratis'],
+    kill: ['¡Chivato del módulo!', '¡Chivato del módulo!', '¡Pa dentro, churumbel galáctico!', '¡Ole, abducción completada!', '¡Más fresco que una lechuga lunar, quillo!'],
+    flee: ['¡Mayday, quillo!', '¡Que me abducen, illo!', '¡Escudos al máximo!', '¡Arrea, a toda máquina!'],
+    poison: ['¡Ay, radiación, quillo!', '¡Esto brilla muy raro, illo!', '¡Me ha sentao mal el uranio!'],
+    virus: ['¡Achís! Sistema infectao', '¡Te hackeé, quillo!', 'Mmm, alien con sabor a gripe'],
+    idle: ['¡Qué calor cerca del sol, illo!', '¡Vámonos pa Marte!', 'Qué arte tiene hoy el cosmos', '¡Ole!', 'Un espetito en Saturno, ya mismo'] },              // radio = rMin + (rMax-rMin) * (hp/hpMax)^exponent
+  scan: { interval: 0.15 },               // segundos entre percepciones (ahorra CPU)
+  plant: { initial: 70, spawnEvery: 1.4, max: 160, hp0: 2, hpMax: 24, growth: 0.7,
+           matureAt: 0.85, edible: 6, rMin: 6, rMax: 20, color: '#a89a88', poisonChance: 0.22 },
+  herbivore: { initial: 12, spawnEvery: 25, max: 40, hp0: 40, hpMax: 110, hungry: 0.9,
+           speed: 44, chaseSpeed: 70, accel: 120, turn: 3.2, chaseTurn: 6, wander: 1.6,
+           perception: 150, moveCost: 0.028, eatGain: 2.2, eatTime: 1.1, reach: 2, detectTime: 0.25,
+           rMin: 11, rMax: 24, color: '#58a6ff',
+           fleeSpeed: 84, fleeTurn: 8, fleeRadius: 170, panicRadius: 80,   // huida
+           boost: 0.7, boostPerMeal: 0.4, boostDecay: 0.1,                 // vigor al comer (temporal)
+           breedAt: 0.8, breedCooldown: 14, adultAge: 20, lifespan: 260 }, // reproducción / vejez
+  carnivore: { initial: 3, spawnEvery: 60, max: 10, hp0: 80, hpMax: 220, hungry: 0.85,
+           speed: 48, chaseSpeed: 96, accel: 140, turn: 2.6, chaseTurn: 5, wander: 1.2,
+           range: 330, cone: 45 /* grados, ángulo total */, loseFactor: 1.5,
+           moveCost: 0.03, gainFactor: 0.9, attackTime: 0.45, eatTime: 1.4, reach: 3, detectTime: 0.3,
+           rMin: 13, rMax: 28, color: '#2fd17a',
+           breedAt: 0.75, breedCooldown: 30, adultAge: 30, lifespan: 380 },
+  virus: { initial: 2, spawnEvery: 75, max: 8, hp0: 45, hpMax: 90, hungry: 0.95,
+           speed: 55, chaseSpeed: 95, accel: 160, turn: 3.5, chaseTurn: 6, wander: 2.2,
+           perception: 280, moveCost: 0.03, drain: 24 /* hp/s que roba al carnívoro */, gainFactor: 0.8, eatTime: 4.5,
+           reach: 2, detectTime: 0.25, rMin: 9, rMax: 16, color: '#b24ad9',
+           breedAt: 0.85, breedCooldown: 24, adultAge: 10, lifespan: 220 }
+};
+const DEBUG = { perception: true, cones: true, heading: false, targets: true, state: false, hp: false, ids: false };
+const DEBUG_LABELS = { perception: 'Radio de percepción', cones: 'Conos de percepción', heading: 'Dirección',
+  targets: 'Objetivos', state: 'Estado', hp: 'Puntos de vida', ids: 'Identificadores' };
+
+/* =====================================================================
+   2. UTILIDADES
+   ===================================================================== */
+const U = {
+  rand: (a, b) => a + Math.random() * (b - a),
+  clamp: (v, a, b) => v < a ? a : v > b ? b : v,
+  angDiff(a, b) { let d = (b - a) % (2 * Math.PI); if (d > Math.PI) d -= 2 * Math.PI; if (d < -Math.PI) d += 2 * Math.PI; return d; },
+  // Relación vida→tamaño (raíz cuadrada: el área crece ~lineal con la vida, sin tamaños absurdos)
+  radius: (hp, hpMax, rMin, rMax) => rMin + (rMax - rMin) * Math.pow(U.clamp(hp / hpMax, 0, 1), CONFIG.sizing.exponent)
+};
+
+/* =====================================================================
+   3. SPATIAL GRID — búsqueda por proximidad, reconstruida cada tick
+   ===================================================================== */
+class SpatialGrid {
+  constructor(w, h, c) { this.c = c; this.cols = Math.ceil(w / c); this.rows = Math.ceil(h / c); this.b = {}; }
+  clear() { for (const k in this.b) for (const a of this.b[k]) a.length = 0; }
+  insert(e) {
+    const b = this.b[e.kind] || (this.b[e.kind] = Array.from({ length: this.cols * this.rows }, () => []));
+    const i = U.clamp(Math.floor(e.y / this.c), 0, this.rows - 1) * this.cols + U.clamp(Math.floor(e.x / this.c), 0, this.cols - 1);
+    b[i].push(e);
+  }
+  query(kind, x, y, r, fn) {
+    const b = this.b[kind]; if (!b) return;
+    const c = this.c, r2 = r * r;
+    const x0 = Math.max(0, Math.floor((x - r) / c)), x1 = Math.min(this.cols - 1, Math.floor((x + r) / c));
+    const y0 = Math.max(0, Math.floor((y - r) / c)), y1 = Math.min(this.rows - 1, Math.floor((y + r) / c));
+    for (let j = y0; j <= y1; j++) for (let i = x0; i <= x1; i++)
+      for (const e of b[j * this.cols + i]) { const dx = e.x - x, dy = e.y - y, d2 = dx * dx + dy * dy; if (d2 <= r2) fn(e, d2); }
+  }
+}
+
+/* =====================================================================
+   4. ENTIDADES
+   ===================================================================== */
+let NEXT_ID = 1;
+class Entity {
+  constructor(world, x, y) { this.id = NEXT_ID++; this.world = world; this.x = x; this.y = y; this.alive = true; this.state = ''; this.stateT = 0; this.speed = 0; this.target = null; }
+  get kind() { return this.constructor.kind; }
+  get cfg() { return CONFIG[this.kind]; }
+  get radius() { const c = this.cfg; return U.radius(this.hp, c.hpMax, c.rMin, c.rMax); }
+  setState(s) { this.state = s; this.stateT = 0; }
+  die() {
+    this.alive = false; this.state = 'MUERTO'; const pl = this.kind === 'plant';
+    this.world.fx(this.x, this.y, pl ? 8 : 24, pl ? (this.poison ? '#d4ff3a' : '#c9b79c') : this.cfg.color, pl ? 45 : 110, pl ? .5 : 1, pl ? 2 : 3.5);   // explosión
+  }
+  say(t, d = 2.2) { this.talk = t; this.talkT = d; }
+  update() {}
+}
+
+class Plant extends Entity {
+  static kind = 'plant';
+  constructor(w, x, y) {
+    super(w, x, y); const c = this.cfg;
+    this.hp = c.hp0; this.growth = c.growth * U.rand(.7, 1.3); this.claimedBy = 0; this.poison = Math.random() < c.poisonChance;
+    this.setState('CRECIENDO'); this.r = this.radius;
+  }
+  update(dt) {
+    if (this.state !== 'CRECIENDO') return;
+    const c = this.cfg;
+    this.hp = Math.min(c.hpMax, this.hp + this.growth * dt);
+    if (this.hp >= c.hpMax * c.matureAt) this.setState('MADURA');
+    this.r = this.radius;
+  }
+}
+
+/* Estados compartidos por animales. Cada estado es una función (this = animal).
+   Las subclases implementan hooks: findTarget, acquire, validTarget, onReach. */
+const AnimalStates = {
+  DEAMBULANDO(dt) {
+    this.wander(dt); this.move(dt);
+    if (!this.hungry()) return;
+    this.scanT -= dt;
+    if (this.scanT <= 0) {
+      this.scanT = CONFIG.scan.interval;
+      const t = this.findTarget();
+      if (t) { this.acquire(t); this.setState('BUSCANDO'); }   // DETECTANDO
+    }
+  },
+  BUSCANDO(dt) {   // reacción breve: se orienta hacia el objetivo antes de salir a por él
+    if (!this.validTarget()) return this.setState('DEAMBULANDO');
+    this.steer(dt, this.angleTo(this.target), this.cfg.speed * .4, this.cfg.chaseTurn); this.move(dt);
+    if (this.stateT >= this.cfg.detectTime) this.setState('PERSIGUIENDO');
+  },
+  PERSIGUIENDO(dt) {
+    if (!this.validTarget()) return this.setState('DEAMBULANDO');
+    const t = this.target;
+    if (this.dist(t) <= this.r + t.r + this.cfg.reach) { this.speed = 0; return this.onReach(); }
+    this.steer(dt, this.angleTo(t), this.cfg.chaseSpeed, this.cfg.chaseTurn); this.move(dt);
+  }
+};
+
+class Animal extends Entity {
+  constructor(w, x, y, genes) {
+    super(w, x, y); const c = this.cfg;
+    this.genes = genes || { speed: U.rand(.9, 1.1), sense: U.rand(.9, 1.1) };   // genes heredables
+    this.vigor = 0; this.sick = 0; this.talkT = 0; this.senseT = 0; this.breedT = c.breedCooldown;
+    this.lifespan = c.lifespan * U.rand(.8, 1.2); this.age = genes ? 0 : U.rand(c.adultAge, this.lifespan * .5);
+    this.hp = c.hp0 * U.rand(.7, 1.1); this.heading = U.rand(0, Math.PI * 2);
+    this.turnVel = 0; this.turnTarget = 0; this.turnT = 0; this.scanT = U.rand(0, CONFIG.scan.interval);
+    this.setState('DEAMBULANDO'); this.r = this.radius;
+  }
+  hungry() { return this.hp < this.cfg.hpMax * this.cfg.hungry; }
+  angleTo(t) { return Math.atan2(t.y - this.y, t.x - this.x); }
+  dist(t) { return Math.hypot(t.x - this.x, t.y - this.y); }
+  setState(s) { super.setState(s); if (s === 'DEAMBULANDO') this.release(); }
+  release() { this.target = null; }
+  die() { this.release(); super.die(); }
+  get radius() { return super.radius * (.6 + .4 * Math.min(1, this.age / this.cfg.adultAge)); }   // crías más pequeñas
+  get metab() { return (this.genes.speed + this.genes.sense) / 2; }   // rasgos mayores = más gasto
+  update(dt) {
+    this.stateT += dt; this.age += dt; this.r = this.radius;
+    this.vigor = Math.max(0, this.vigor - (this.cfg.boostDecay || 0) * dt);
+    if (this.talkT > 0) this.talkT -= dt;
+    if (this.sick > 0) this.sick -= dt;
+    if (Math.random() < dt * .03) this.chat('idle');
+    if (this.age > this.lifespan) return this.die();                 // muerte por vejez
+    if (this.sense) this.sense(dt);
+    const f = this.constructor.states[this.state]; if (f) f.call(this, dt);
+    if (this.alive) this.tryBreed(dt);
+  }
+  chat(k, p = 1) { if (this.talkT <= 0 && Math.random() < p) { const a = CONFIG.talk[k]; this.say(a[Math.random() * a.length | 0], 2.4); } }
+  tryBreed(dt) {
+    const c = this.cfg, W = this.world, s = this.state; this.breedT -= dt;
+    if (this.breedT > 0 || this.hp < c.hpMax * c.breedAt || this.age < c.adultAge || W.counts[this.kind] >= c.max) return;
+    if (s === 'COMIENDO' || s === 'ATACANDO' || s === 'CAPTURADO') return;
+    this.breedT = c.breedCooldown; const g = CONFIG.genes, m = v => U.clamp(v * U.rand(1 - g.mutation, 1 + g.mutation), g.min, g.max);
+    const kid = W.spawn(this.kind, this.x + U.rand(-12, 12), this.y + U.rand(-12, 12), { speed: m(this.genes.speed), sense: m(this.genes.sense) });
+    kid.hp = c.hp0 * .8; this.hp -= kid.hp;                           // el hijo cuesta vida al progenitor
+  }
+  // Movimiento natural: giro suave con velocidad angular que cambia lentamente + evita bordes
+  wander(dt) {
+    const c = this.cfg, W = this.world, m = 70;
+    this.turnT -= dt;
+    if (this.turnT <= 0) { this.turnT = U.rand(.6, 1.8); this.turnTarget = U.rand(-1, 1) * c.wander; }
+    this.turnVel += (this.turnTarget - this.turnVel) * Math.min(1, dt * 2);
+    if (this.x < m || this.y < m || this.x > W.w - m || this.y > W.h - m)
+      this.steer(dt, Math.atan2(W.h / 2 - this.y, W.w / 2 - this.x), c.speed, c.turn * 1.5);
+    else { this.heading += this.turnVel * dt; this.steer(dt, null, c.speed, 0); }
+  }
+  steer(dt, desired, speed, turn) {
+    if (desired !== null) { const d = U.angDiff(this.heading, desired); this.heading += U.clamp(d, -turn * dt, turn * dt); }
+    speed *= this.genes.speed * (1 + this.vigor * (this.cfg.boost || 0)) * (this.sick > 0 ? .65 : 1);
+    const a = this.cfg.accel * dt; this.speed += U.clamp(speed - this.speed, -a, a);
+  }
+  // Desplazamiento + coste energético proporcional a la distancia recorrida
+  move(dt) {
+    const d = this.speed * dt, W = this.world;
+    this.x = U.clamp(this.x + Math.cos(this.heading) * d, this.r, W.w - this.r);
+    this.y = U.clamp(this.y + Math.sin(this.heading) * d, this.r, W.h - this.r);
+    this.hp -= d * this.cfg.moveCost * this.metab;
+    if (this.kind === 'herbivore' && this.speed > 8 && Math.random() < .6) this.world.fx(this.x - Math.cos(this.heading) * this.r * 1.3, this.y - Math.sin(this.heading) * this.r * 1.3, 1, '#7fd0ff', 14, .5, 2.4);   // estela del motor
+    if (this.hp <= 0) this.die();
+  }
+  gain(v) { this.hp = Math.min(this.cfg.hpMax, this.hp + v); this.vigor = Math.min(1, this.vigor + (this.cfg.boostPerMeal || 0)); }
+}
+
+class Herbivore extends Animal {
+  static kind = 'herbivore';
+  static states = { ...AnimalStates,
+    COMIENDO(dt) {
+      this.speed = 0;
+      if (!this.validTarget()) return this.setState('DEAMBULANDO');
+      if (this.stateT >= this.cfg.eatTime) {
+        const t = this.target;
+        if (t.poison) { this.hp -= this.hp * U.rand(.6, 1.05); this.sick = 5; this.vigor = 0; this.chat('poison'); if (this.hp <= 0) this.die(); }   // veneno: mata o casi
+        else { this.gain(t.hp * this.cfg.eatGain); this.chat('eat', .35); }
+        t.die(); if (this.alive) this.setState('DEAMBULANDO');
+      }
+    },
+    CAPTURADO() { this.speed = 0; if (this.stateT > 3) this.setState('DEAMBULANDO'); },
+    HUYENDO(dt) {   // se aleja del carnívoro (con repulsión de bordes); termina al ponerse a salvo
+      const t = this.threat, c = this.cfg, W = this.world, m = 80;
+      if (!t || !t.alive || this.dist(t) > c.fleeRadius * 1.3) return this.setState('DEAMBULANDO');
+      let vx = this.x - t.x, vy = this.y - t.y; const l = Math.hypot(vx, vy) || 1; vx /= l; vy /= l;
+      if (this.x < m) vx += 1; if (this.x > W.w - m) vx -= 1; if (this.y < m) vy += 1; if (this.y > W.h - m) vy -= 1;
+      this.steer(dt, Math.atan2(vy, vx), c.fleeSpeed, c.fleeTurn); this.move(dt);
+    }
+  };
+  findTarget() {
+    let best = null, bd = Infinity; const ed = CONFIG.plant.edible;
+    this.world.grid.query('plant', this.x, this.y, this.cfg.perception * this.genes.sense, (p, d2) => {
+      if (p.alive && p.hp >= ed && (!p.claimedBy || p.claimedBy === this.id) && d2 < bd) { bd = d2; best = p; }
+    });
+    return best;
+  }
+  acquire(t) { t.claimedBy = this.id; this.target = t; }
+  validTarget() { const t = this.target; return !!t && t.alive && t.claimedBy === this.id; }
+  release() { if (this.target && this.target.claimedBy === this.id) this.target.claimedBy = 0; this.target = null; }
+  onReach() { this.setState('COMIENDO'); }
+  sense(dt) {   // amenaza: carnívoro que me persigue o que está muy cerca
+    const s = this.state, c = this.cfg; if (s === 'CAPTURADO' || s === 'HUYENDO' || (this.senseT -= dt) > 0) return;
+    this.senseT = CONFIG.scan.interval; let th = null, bd = Infinity;
+    this.world.grid.query('carnivore', this.x, this.y, c.fleeRadius, (k, d2) => {
+      if (k.alive && (k.target === this || d2 < c.panicRadius ** 2) && d2 < bd) { bd = d2; th = k; }
+    });
+    if (th) { this.release(); this.threat = th; this.setState('HUYENDO'); this.chat('flee', .5); }
+  }
+  capture(id) { this.release(); this.hunter = id; this.setState('CAPTURADO'); this.speed = 0; }
+}
+
+class Carnivore extends Animal {
+  static kind = 'carnivore';
+  static states = { ...AnimalStates,
+    ATACANDO() {
+      this.speed = 0; const t = this.target;
+      if (!t || !t.alive) return this.setState('DEAMBULANDO');
+      if (this.stateT >= this.cfg.attackTime) {
+        this.gain(t.hp * this.cfg.gainFactor); t.die(); this.target = null; this.setState('COMIENDO');
+        this.chat('kill', .6);
+      }
+    },
+    COMIENDO() { this.speed = 0; if (this.stateT >= this.cfg.eatTime) this.setState('DEAMBULANDO'); }
+  };
+  // Cono de percepción: dentro del alcance y a menos de cone/2 respecto a la dirección de avance
+  findTarget() {
+    const c = this.cfg, half = c.cone * Math.PI / 360; let best = null, bd = Infinity;
+    this.world.grid.query('herbivore', this.x, this.y, c.range * this.genes.sense, (h, d2) => {
+      if (!h.alive || h.state === 'CAPTURADO' || d2 >= bd) return;
+      if (Math.abs(U.angDiff(this.heading, Math.atan2(h.y - this.y, h.x - this.x))) <= half) { bd = d2; best = h; }
+    });
+    return best;
+  }
+  acquire(t) { this.target = t; }
+  validTarget() {
+    const t = this.target;
+    return !!t && t.alive && (t.state !== 'CAPTURADO' || t.hunter === this.id) && this.dist(t) < this.cfg.range * this.cfg.loseFactor;
+  }
+  onReach() { this.target.capture(this.id); this.setState('ATACANDO'); }
+}
+
+// Registro de especies: para añadir una especie basta clase + entrada en CONFIG + registro aquí
+class Virus extends Animal {   // parásito: solo ataca carnívoros, se adhiere y les drena vida
+  static kind = 'virus';
+  static states = { ...AnimalStates,
+    COMIENDO(dt) {
+      const t = this.target, c = this.cfg;
+      if (!t || !t.alive) return this.setState('DEAMBULANDO');
+      this.speed = 0; this.x = t.x - Math.cos(this.heading) * t.r; this.y = t.y - Math.sin(this.heading) * t.r;
+      const d = Math.min(t.hp, c.drain * dt); t.hp -= d; t.sick = .5; this.hp = Math.min(c.hpMax, this.hp + d * c.gainFactor);
+      if (t.hp <= 0) t.die();
+      if (this.stateT >= c.eatTime || !t.alive) this.setState('DEAMBULANDO');
+    }
+  };
+  findTarget() {
+    let best = null, bd = Infinity;
+    this.world.grid.query('carnivore', this.x, this.y, this.cfg.perception * this.genes.sense, (k, d2) => { if (k.alive && d2 < bd) { bd = d2; best = k; } });
+    return best;
+  }
+  acquire(t) { this.target = t; }
+  validTarget() { const t = this.target; return !!t && t.alive && this.dist(t) < this.cfg.perception * 1.6; }
+  onReach() { this.setState('COMIENDO'); this.chat('virus', .7); }
+}
+
+const SPECIES = { plant: Plant, herbivore: Herbivore, carnivore: Carnivore, virus: Virus };
+
+/* =====================================================================
+   5. MUNDO / SIMULACIÓN (sin dependencias de render ni UI)
+   ===================================================================== */
+class World {
+  constructor() {
+    const W = CONFIG.world; this.w = W.width; this.h = W.height;
+    this.grid = new SpatialGrid(this.w, this.h, W.cell);
+    this.entities = []; this.counts = {}; this.timers = {}; this.time = 0; this.history = []; this.histT = 0; this.fxs = []; this.flash = 0; this.news = null; this.eventT = 60;
+    for (const k in SPECIES) { this.counts[k] = 0; this.timers[k] = CONFIG[k].spawnEvery; for (let i = 0; i < CONFIG[k].initial; i++) this.spawn(k); }
+  }
+  spawn(kind, x = U.rand(10, this.w - 10), y = U.rand(10, this.h - 10), genes) {
+    const e = new SPECIES[kind](this, x, y, genes);
+    this.entities.push(e); this.counts[kind]++; return e;
+  }
+  step(dt) {
+    this.time += dt; if (this.flash > 0) this.flash -= dt * 1.5; if (this.news && (this.news.t -= dt) <= 0) this.news = null;
+    if ((this.eventT -= dt) <= 0) { this.eventT = U.rand(70, 110); Math.random() < .6 ? this.meteorShower() : this.solarStorm(); }   // eventos aleatorios
+    for (const p of this.fxs) { p.x += p.vx * dt; p.y += p.vy * dt; p.l -= dt; } this.fxs = this.fxs.filter(p => p.l > 0);
+    this.grid.clear(); for (const e of this.entities) this.grid.insert(e);
+    for (const e of this.entities) if (e.alive) e.update(dt);
+    for (const k in SPECIES) {                      // spawner por especie
+      this.timers[k] -= dt;
+      if (this.timers[k] <= 0) { this.timers[k] = CONFIG[k].spawnEvery; if (this.counts[k] < CONFIG[k].max) this.spawn(k); }
+    }
+    let j = 0; for (const k in this.counts) this.counts[k] = 0;
+    for (const e of this.entities) if (e.alive) { this.entities[j++] = e; this.counts[e.kind]++; }
+    this.entities.length = j;
+    if ((this.histT -= dt) <= 0) { this.histT = 2; this.history.push([this.counts.plant, this.counts.herbivore, this.counts.carnivore, this.counts.virus]); if (this.history.length > 200) this.history.shift(); }
+  }
+  fx(x, y, n, col, sp = 60, life = .7, size = 2.5) {   // partículas
+    if (this.fxs.length > 500) return;
+    for (let i = 0; i < n; i++) { const a = U.rand(0, 6.2832), v = U.rand(.2, 1) * sp; this.fxs.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, l: life, m: life, c: col, s: size * U.rand(.6, 1.2) }); }
+  }
+  meteorShower() { for (let i = 0; i < 18; i++) { const e = this.spawn('plant'); this.fx(e.x, e.y, 6, '#ffd9a0', 70, .8, 2.5); } this.news = { text: '☄ ¡Lluvia de meteoritos!', t: 4 }; }
+  solarStorm() {
+    for (const e of this.entities) if (e.alive && e.kind !== 'plant') { e.hp -= e.cfg.hpMax * .06; e.sick = 4; if (e.hp <= 0) e.die(); }
+    this.flash = 1; this.news = { text: '☀ ¡Tormenta solar! Todos pierden energía', t: 4 };
+  }
+  change(kind, n) {   // añadir (n>0) o quitar (n<0) organismos
+    if (n > 0) for (let i = 0; i < n; i++) this.spawn(kind);
+    else {
+      const l = this.entities.filter(e => e.kind === kind && e.alive);
+      for (let i = 0; i < -n && l.length; i++) l.splice(Math.random() * l.length | 0, 1)[0].die();
+      this.entities = this.entities.filter(e => e.alive); this.counts[kind] = this.entities.filter(e => e.kind === kind).length;
+    }
+  }
+  pick(x, y, tol) {
+    let best = null, bd = Infinity;
+    for (const e of this.entities) { const d = Math.hypot(e.x - x, e.y - y) - e.r; if (d < tol && d < bd) { bd = d; best = e; } }
+    return best;
+  }
+}
+
+/* =====================================================================
+   6. RENDERER (Canvas 2D) — solo lee el estado del mundo
+   ===================================================================== */
+const PAL = { herbivore: ['#d6ebff', '#5aa0f0', '#27508f'], carnivore: ['#a8ffd0', '#2fd17a', '#0f6b47'], virus: ['#f3c4ff', '#b24ad9', '#5a1f7a'] };
+const rnd = (a, b) => Math.abs(Math.sin(a * 12.9898 + b * 78.233) * 43758.5453) % 1;
+class Renderer {
+  constructor(cv) { this.cv = cv; this.ctx = cv.getContext('2d'); this.cam = { x: 0, y: 0, z: 1 }; this.selected = null; this.world = null; }
+  resize() {
+    this.dpr = window.devicePixelRatio || 1;
+    this.cv.width = this.cv.clientWidth * this.dpr; this.cv.height = this.cv.clientHeight * this.dpr; this.fit();
+  }
+  fit() {
+    const W = this.world, w = this.cv.clientWidth, h = this.cv.clientHeight; if (!W) return;
+    const z = Math.min(w / W.w, h / W.h) * .95; this.cam = { z, x: -(w / z - W.w) / 2, y: -(h / z - W.h) / 2 };
+  }
+  toWorld(px, py) { return [px / this.cam.z + this.cam.x, py / this.cam.z + this.cam.y]; }
+  planet(g, x, y, r, [l, m, d], ring) {
+    const half = (a0, a1) => { g.save(); g.translate(x, y); g.rotate(-.35); g.strokeStyle = 'rgba(230,200,160,.38)'; g.lineWidth = r * .2; g.beginPath(); g.ellipse(0, 0, r * 1.9, r * .5, 0, a0, a1); g.stroke(); g.restore(); };
+    if (ring) half(Math.PI, 6.2832);
+    const q = g.createRadialGradient(x - r * .4, y - r * .4, r * .1, x, y, r); q.addColorStop(0, l); q.addColorStop(.6, m); q.addColorStop(1, d);
+    g.fillStyle = q; g.beginPath(); g.arc(x, y, r, 0, 6.2832); g.fill();
+    g.save(); g.beginPath(); g.arc(x, y, r, 0, 6.2832); g.clip(); g.fillStyle = 'rgba(0,0,0,.10)'; for (let i = 0; i < 7; i++) g.fillRect(x - r, y - r + i * r * .3, r * 2, r * .1);
+    const sh = g.createRadialGradient(x - r * .5, y - r * .4, r * .4, x + r * .2, y + r * .2, r * 1.3); sh.addColorStop(0, 'rgba(0,0,10,0)'); sh.addColorStop(1, 'rgba(0,0,12,.8)'); g.fillStyle = sh; g.fillRect(x - r, y - r, r * 2, r * 2); g.restore();
+    g.strokeStyle = 'rgba(160,210,255,.25)'; g.lineWidth = 3; g.beginPath(); g.arc(x, y, r + 1, 0, 6.2832); g.stroke();
+    if (ring) half(0, Math.PI);
+  }
+  bg(W) {   // espacio profundo pre-renderizado: nebulosas, estrellas, planetas, viñeta
+    if (this._bg) return this._bg;
+    const c = this._bg = document.createElement('canvas'); c.width = W.w; c.height = W.h; const g = c.getContext('2d');
+    const base = g.createLinearGradient(0, 0, W.w, W.h); base.addColorStop(0, '#05030f'); base.addColorStop(.5, '#0a0f2c'); base.addColorStop(1, '#12062a'); g.fillStyle = base; g.fillRect(0, 0, W.w, W.h);
+    g.globalCompositeOperation = 'lighter';
+    const neb = ['rgba(120,40,200,.16)', 'rgba(30,120,220,.14)', 'rgba(220,40,140,.10)', 'rgba(20,200,200,.08)'];
+    for (let i = 0; i < 26; i++) { const x = U.rand(0, W.w), y = U.rand(0, W.h), r = U.rand(180, 480), q = g.createRadialGradient(x, y, 0, x, y, r); q.addColorStop(0, neb[i % 4]); q.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = q; g.beginPath(); g.arc(x, y, r, 0, 6.2832); g.fill(); }
+    for (let i = 0; i < 1400; i++) { g.fillStyle = `rgba(${200 + U.rand(0, 55) | 0},${210 + U.rand(0, 45) | 0},255,${U.rand(.15, .8)})`; g.beginPath(); g.arc(U.rand(0, W.w), U.rand(0, W.h), Math.random() < .9 ? U.rand(.4, 1) : U.rand(1, 1.8), 0, 6.2832); g.fill(); }
+    g.globalCompositeOperation = 'source-over';
+    this.planet(g, W.w * .84, W.h * .2, 130, ['#f1c98e', '#b0693f', '#4a2412'], true);
+    this.planet(g, W.w * .13, W.h * .8, 75, ['#9fdcff', '#2f6fb8', '#0b2a5a'], false);
+    this.planet(g, W.w * .62, W.h * .93, 34, ['#e8e8e8', '#8a8a92', '#2a2a30'], false);
+    const v = g.createRadialGradient(W.w / 2, W.h / 2, W.h * .35, W.w / 2, W.h / 2, W.w * .62); v.addColorStop(0, 'rgba(0,0,10,0)'); v.addColorStop(1, 'rgba(0,0,10,.6)'); g.fillStyle = v; g.fillRect(0, 0, W.w, W.h);
+    return c;
+  }
+  draw() {
+    const { ctx: c, cam, dpr } = this, W = this.world, z = cam.z;
+    c.setTransform(1, 0, 0, 1, 0, 0); c.fillStyle = '#03040c';
+    c.fillRect(0, 0, this.cv.width, this.cv.height);
+    c.setTransform(dpr * z, 0, 0, dpr * z, -cam.x * z * dpr, -cam.y * z * dpr);
+    c.drawImage(this.bg(W), 0, 0, W.w, W.h);
+    if (!this.tw) this.tw = Array.from({ length: 140 }, () => ({ x: U.rand(0, W.w), y: U.rand(0, W.h), p: U.rand(0, 6.28), s: U.rand(1, 2.4) }));
+    const ts = performance.now() / 1000; c.fillStyle = '#fff';
+    for (const t of this.tw) { c.globalAlpha = .2 + .6 * Math.abs(Math.sin(ts * .7 + t.p)); c.fillRect(t.x - t.s / 2, t.y - t.s / 2, t.s, t.s); }
+    c.globalAlpha = 1;
+    c.strokeStyle = 'rgba(90,200,255,.18)'; c.lineWidth = 14; c.strokeRect(0, 0, W.w, W.h); c.strokeStyle = 'rgba(120,220,255,.7)'; c.lineWidth = 2; c.strokeRect(0, 0, W.w, W.h);
+    const pc = CONFIG.plant, tm = performance.now() / 400;
+    for (const e of W.entities) if (e.kind === 'plant') {
+      const r = e.r, po = e.poison, mad = e.state === 'MADURA', n = 9; c.globalAlpha = .65 + .35 * e.hp / pc.hpMax;
+      if (po) { const q = c.createRadialGradient(e.x, e.y, r * .5, e.x, e.y, r * 2.2); q.addColorStop(0, `rgba(212,255,58,${.28 + .12 * Math.sin(tm + e.id)})`); q.addColorStop(1, 'rgba(212,255,58,0)'); c.fillStyle = q; c.beginPath(); c.arc(e.x, e.y, r * 2.2, 0, 6.2832); c.fill(); }   // radiactivo
+      c.save(); c.translate(e.x, e.y); c.rotate(e.id + tm * .02); c.beginPath();
+      for (let i = 0; i < n; i++) { const a = i / n * 6.2832, k = r * (.78 + .32 * rnd(e.id, i)); i ? c.lineTo(Math.cos(a) * k, Math.sin(a) * k) : c.moveTo(Math.cos(a) * k, Math.sin(a) * k); }
+      c.closePath(); const q = c.createRadialGradient(-r * .3, -r * .3, r * .1, 0, 0, r * 1.1); q.addColorStop(0, po ? '#6d7a4a' : '#b4a590'); q.addColorStop(1, po ? '#222a14' : '#4a3f36');
+      c.fillStyle = q; c.fill(); c.strokeStyle = 'rgba(0,0,0,.5)'; c.lineWidth = 1.2 / z; c.stroke();
+      for (let i = 0; i < 3; i++) { const a = i * 2.2 + e.id, d = r * .4; this.E(Math.cos(a) * d, Math.sin(a) * d, r * (.1 + .05 * i), r * (.1 + .05 * i), 'rgba(0,0,0,.3)'); }   // cráteres
+      if (po) { c.strokeStyle = 'rgba(212,255,58,.9)'; c.lineWidth = r * .08; c.beginPath(); c.moveTo(-r * .6, -r * .2); c.lineTo(-r * .1, r * .1); c.lineTo(r * .3, -r * .2); c.lineTo(r * .6, r * .15); c.stroke(); }
+      else if (mad) { c.fillStyle = '#7fe9ff'; for (const [x, y] of [[.3, .25], [-.35, .3]]) { c.beginPath(); c.moveTo(r * x, r * y - r * .16); c.lineTo(r * x + r * .1, r * y); c.lineTo(r * x, r * y + r * .16); c.lineTo(r * x - r * .1, r * y); c.closePath(); c.fill(); } }   // cristales
+      c.restore();
+    }
+    c.globalAlpha = 1; c.lineWidth = 1.5 / z;
+    for (const k of ['herbivore', 'carnivore', 'virus']) for (const e of W.entities) if (e.kind === k) this.animal(e);
+    if (this.selected && this.selected.alive) {
+      const s = this.selected; c.strokeStyle = '#fff'; c.lineWidth = 1.5 / z; c.setLineDash([4 / z, 3 / z]);
+      c.beginPath(); c.arc(s.x, s.y, s.r + 5, 0, 6.2832); c.stroke(); c.setLineDash([]);
+    }
+    c.globalCompositeOperation = 'lighter';
+    for (const p of W.fxs) { c.globalAlpha = Math.max(0, p.l / p.m); c.fillStyle = p.c; c.beginPath(); c.arc(p.x, p.y, p.s, 0, 6.2832); c.fill(); }
+    c.globalCompositeOperation = 'source-over'; c.globalAlpha = 1;
+    for (const e of W.entities) if (e.talkT > 0) this.bubble(e);
+    this.debug(W);
+    if (W.flash > 0) { c.setTransform(1, 0, 0, 1, 0, 0); c.fillStyle = `rgba(255,230,160,${W.flash * .3})`; c.fillRect(0, 0, this.cv.width, this.cv.height); }
+  }
+  E(x, y, rx, ry, f, s, rot = 0) { const c = this.ctx; c.fillStyle = f; c.beginPath(); c.ellipse(x, y, rx, ry, rot, 0, 6.2832); c.fill(); if (s) c.stroke(); }
+  G(x, y, rx, ry, l, b, s) {   // elipse con degradado radial (luz arriba-izquierda)
+    const g = this.ctx.createRadialGradient(x - rx * .3, y - ry * .3, Math.min(rx, ry) * .1, x, y, Math.max(rx, ry) * 1.05);
+    g.addColorStop(0, l); g.addColorStop(1, b); this.E(x, y, rx, ry, g, s);
+  }
+  animal(e) {   // dibujo en coordenadas locales: +x = hacia donde mira
+    const c = this.ctx, z = this.cam.z, kd = e.kind, r = e.r, ph = e.age * e.speed * .16;
+    const P = e.state === 'CAPTURADO' ? ['#dfe7ee', '#9fb0bf', '#5d6e7d'] : PAL[kd]; let open = 0, lunge = 0;
+    if (e.state === 'COMIENDO') open = .25 + .6 * Math.abs(Math.sin(e.stateT * (kd === 'herbivore' ? 12 : 8)));
+    else if (e.state === 'ATACANDO') { const l = Math.sin(Math.min(1, e.stateT / e.cfg.attackTime) * Math.PI); open = .3 + .7 * l; lunge = r * .9 * l; }
+    if (e.state === 'BUSCANDO') { c.strokeStyle = `rgba(255,230,120,${1 - e.stateT / e.cfg.detectTime})`; c.lineWidth = 1.5 / z; c.beginPath(); c.arc(e.x, e.y, r + 3 + e.stateT * 30, 0, 6.2832); c.stroke(); }
+    if (e.vigor > .05) { c.strokeStyle = `rgba(255,214,70,${.25 + e.vigor * .6})`; c.lineWidth = (1 + e.vigor * 2) / z; c.beginPath(); c.arc(e.x, e.y, r * 1.5 + 2, 0, 6.2832); c.stroke(); }
+    if (kd === 'herbivore' && e.state === 'COMIENDO' && e.target) {   // láser minero
+      c.strokeStyle = `rgba(120,255,220,${.45 + .4 * Math.sin(e.stateT * 30)})`; c.lineWidth = 3 / z; c.beginPath(); c.moveTo(e.x, e.y); c.lineTo(e.target.x, e.target.y); c.stroke();
+    }
+    c.save(); c.translate(e.x, e.y); c.rotate(e.heading); c.translate(lunge, e.state === 'CAPTURADO' ? Math.sin(e.stateT * 60) * 1.2 : 0);
+    const pu = e.state === 'COMIENDO' ? 1 + .05 * Math.sin(e.stateT * 20) : 1; c.scale(pu, pu);
+    this.E(0, 0, r * 1.4, r * 1.4, kd === 'carnivore' ? 'rgba(47,209,122,.10)' : kd === 'herbivore' ? 'rgba(90,160,240,.10)' : 'rgba(178,74,217,.12)');   // aura
+    c.strokeStyle = 'rgba(0,0,0,.4)'; c.lineWidth = 1.2 / z;
+    if (kd === 'carnivore') {   // ALIEN
+      c.lineCap = 'round';
+      for (let i = 0; i < 5; i++) {   // tentáculos ondulantes
+        const s = (i - 2) * .4, w = Math.sin(e.age * 6 + i * 1.3) * r * .4, tx = -r * 2.3, ty = s * r * 1.9 + w * .6;
+        c.strokeStyle = P[1]; c.lineWidth = r * (.24 - Math.abs(i - 2) * .03); c.beginPath(); c.moveTo(-r * .4, s * r * .7);
+        c.bezierCurveTo(-r * 1.1, s * r * 1.3 + w, -r * 1.7, s * r * 1.1 - w, tx, ty); c.stroke(); this.E(tx, ty, r * .12, r * .12, P[0]);
+      }
+      for (const s of [-1, 1]) { c.strokeStyle = P[2]; c.lineWidth = r * .07; c.beginPath(); c.moveTo(r * .45, s * r * .6); c.quadraticCurveTo(r * .8, s * r * 1.2, r * 1.15, s * r * 1.3); c.stroke(); this.E(r * 1.15, s * r * 1.3, r * .13, r * .13, `rgba(255,255,140,${.6 + .4 * Math.sin(e.age * 5)})`); }   // antenas
+      c.strokeStyle = 'rgba(0,0,0,.4)'; c.lineWidth = 1.2 / z;
+      this.G(-r * .1, 0, r * 1.2, r * .95, P[0], P[1], 1);
+      for (let i = 0; i < 4; i++) this.E(-r * (.2 + i * .25), (i % 2 ? 1 : -1) * r * .35, r * .1, r * .1, 'rgba(15,107,71,.55)');
+      for (const s of [-1, 1]) { this.E(r * .6, s * r * .42, r * .42, r * .22, '#04140c', 1, s * .5); this.E(r * .72, s * r * .36, r * .1, r * .06, 'rgba(255,255,255,.85)', 0, s * .5); }   // ojos
+      this.E(r * 1.0, 0, r * (.14 + open * .1), r * (.05 + open * .3), '#2b0510', 1);
+      if (open > .15) { c.fillStyle = '#fff'; for (const s of [-1, 1]) { c.beginPath(); c.moveTo(r * .95, s * r * (.08 + open * .22)); c.lineTo(r * 1.4, s * r * (.1 + open * .2)); c.lineTo(r * 1.05, s * r * (.3 + open * .2)); c.closePath(); c.fill(); } }   // colmillos
+    } else if (kd === 'herbivore') {   // NAVE HUMANA
+      const th = Math.min(1, e.speed / (e.cfg.speed * 1.4)), fl = r * (.3 + th * 1.1 + Math.random() * .25);
+      c.fillStyle = `rgba(110,200,255,${.55 + .3 * Math.random()})`; c.beginPath(); c.moveTo(-r * .9, -r * .2); c.lineTo(-r * .9 - fl, 0); c.lineTo(-r * .9, r * .2); c.closePath(); c.fill();
+      c.fillStyle = 'rgba(255,255,255,.8)'; c.beginPath(); c.moveTo(-r * .9, -r * .08); c.lineTo(-r * .9 - fl * .55, 0); c.lineTo(-r * .9, r * .08); c.closePath(); c.fill();
+      c.strokeStyle = 'rgba(0,0,0,.4)'; c.lineWidth = 1.2 / z;
+      for (const s of [-1, 1]) {   // alas con luces de posición
+        c.fillStyle = P[1]; c.beginPath(); c.moveTo(r * .3, s * r * .2); c.lineTo(-r * .7, s * r * 1.05); c.lineTo(-r * .98, s * r); c.lineTo(-r * .6, s * r * .25); c.closePath(); c.fill(); c.stroke();
+        this.E(-r * .85, s * r, r * .1, r * .1, (Math.sin(e.age * 5) > 0) === (s > 0) ? '#ff4d4d' : '#4dff88');
+      }
+      const fg = c.createLinearGradient(0, -r * .45, 0, r * .45); fg.addColorStop(0, P[0]); fg.addColorStop(1, P[1]);
+      c.fillStyle = fg; c.beginPath(); c.moveTo(r * 1.35, 0); c.bezierCurveTo(r * .9, -r * .45, -r * .4, -r * .45, -r * .95, -r * .28); c.lineTo(-r * .95, r * .28); c.bezierCurveTo(-r * .4, r * .45, r * .9, r * .45, r * 1.35, 0); c.closePath(); c.fill(); c.stroke();
+      c.strokeStyle = 'rgba(0,0,0,.25)'; c.beginPath(); c.moveTo(-r * .8, 0); c.lineTo(r * .1, 0); c.stroke(); c.strokeStyle = 'rgba(0,0,0,.4)';
+      for (const s of [-1, 1]) this.E(-r * .95, s * r * .2, r * .14, r * .12, P[2], 1);
+      this.E(r * .5, 0, r * .4, r * .2, '#0b2a4a', 1); this.E(r * .55, -r * .06, r * .22, r * .07, 'rgba(180,235,255,.75)');   // cabina
+    } else {
+      const pl = Math.sin(e.age * 6);
+      c.save(); c.rotate(e.age * .9); c.strokeStyle = P[2]; c.lineWidth = r * .2;
+      for (let i = 0; i < 10; i++) { const a = i * .6283, L = r * (1.55 + .15 * Math.sin(e.age * 4 + i)); c.beginPath(); c.moveTo(Math.cos(a) * r * .8, Math.sin(a) * r * .8); c.lineTo(Math.cos(a) * L, Math.sin(a) * L); c.stroke(); this.E(Math.cos(a) * L, Math.sin(a) * L, r * .2, r * .2, '#eaffa6', 1); }
+      c.restore(); c.strokeStyle = 'rgba(0,0,0,.4)'; c.lineWidth = 1.2 / z;
+      this.G(0, 0, r, r, P[0], P[1], 1); this.E(0, 0, r * (.42 + .06 * pl), r * (.42 + .06 * pl), 'rgba(255,255,150,.55)');
+      for (const s of [-1, 1]) { this.E(r * .4, s * r * .32, r * .22, r * .24, '#fff', 1); this.E(r * .47, s * r * .32, r * .11, r * .13, '#c00'); c.strokeStyle = P[2]; c.lineWidth = r * .1; c.beginPath(); c.moveTo(r * .2, s * r * .6); c.lineTo(r * .6, s * r * .3); c.stroke(); }
+      this.E(r * .72, 0, r * (.12 + open * .1), r * (.08 + open * .3), '#2b0f12');
+    }
+    if (e.sick > 0) { c.fillStyle = 'rgba(120,255,70,.35)'; c.beginPath(); c.arc(0, 0, r * 1.1, 0, 6.2832); c.fill(); }   // intoxicado / contagiado
+    c.restore();
+  }
+  bubble(e) {
+    const c = this.ctx, z = this.cam.z; c.font = `bold ${11 / z}px system-ui,sans-serif`;
+    const w = c.measureText(e.talk).width + 10 / z, h = 17 / z, x = e.x - w / 2, y = e.y - e.r * 1.4 - 28 / z;
+    c.globalAlpha = Math.min(1, e.talkT * 2); c.fillStyle = '#fff'; c.strokeStyle = '#222'; c.lineWidth = 1 / z;
+    c.beginPath(); c.roundRect(x, y, w, h, 6 / z); c.fill(); c.stroke();
+    c.beginPath(); c.moveTo(e.x - 3 / z, y + h); c.lineTo(e.x, y + h + 5 / z); c.lineTo(e.x + 3 / z, y + h); c.fill();
+    c.fillStyle = '#111'; c.fillText(e.talk, x + 5 / z, y + 12.5 / z); c.globalAlpha = 1;
+  }
+  debug(W) {
+    const c = this.ctx, z = this.cam.z, D = DEBUG; c.font = `${11 / z}px system-ui,sans-serif`; c.lineWidth = 1 / z;
+    for (const e of W.entities) {
+      if (e.kind === 'plant') { if (D.ids) { c.fillStyle = '#cfe'; c.fillText('#' + e.id, e.x + e.r, e.y); } continue; }
+      if (D.perception && e.kind !== 'carnivore') { c.strokeStyle = 'rgba(88,166,255,.35)'; c.beginPath(); c.arc(e.x, e.y, e.cfg.perception * e.genes.sense, 0, 6.2832); c.stroke(); }
+      if (D.cones && e.kind === 'carnivore') {
+        const h = e.cfg.cone * Math.PI / 360; c.fillStyle = 'rgba(47,209,122,.10)'; c.strokeStyle = 'rgba(47,209,122,.45)';
+        c.beginPath(); c.moveTo(e.x, e.y); c.arc(e.x, e.y, e.cfg.range * e.genes.sense, e.heading - h, e.heading + h); c.closePath(); c.fill(); c.stroke();
+      }
+      if (D.heading) { c.strokeStyle = '#fff'; c.beginPath(); c.moveTo(e.x, e.y); c.lineTo(e.x + Math.cos(e.heading) * (e.r + 14), e.y + Math.sin(e.heading) * (e.r + 14)); c.stroke(); }
+      if (D.targets && e.target && e.target.alive) { c.strokeStyle = 'rgba(255,230,120,.7)'; c.beginPath(); c.moveTo(e.x, e.y); c.lineTo(e.target.x, e.target.y); c.stroke(); }
+      const t = []; if (D.ids) t.push('#' + e.id); if (D.state) t.push(e.state); if (D.hp) t.push(e.hp.toFixed(0) + '/' + e.cfg.hpMax);
+      c.fillStyle = '#fff'; t.forEach((s, i) => c.fillText(s, e.x + e.r + 3, e.y - e.r + i * 12 / z));
+    }
+  }
+}
+
+/* =====================================================================
+   7. UI + INPUT + BUCLE PRINCIPAL
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+const cv = $('c'), renderer = new Renderer(cv);
+let world, paused = false, speed = 1, acc = 0, last = performance.now(), uiT = 0;
+
+function reset() { world = new World(); renderer.world = world; renderer.selected = null; acc = 0; renderer.fit(); }
+const fmt = t => String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(Math.floor(t % 60)).padStart(2, '0');
+
+function updateUI() {
+  const nw = world.news; $('banner').textContent = nw ? nw.text : ''; $('banner').classList.toggle('show', !!nw);
+  const n = world.counts, kv = (a, b) => `<div class="kv"><span>${a}</span><span>${b}</span></div>`;
+  const dot = k => `<i class="dot" style="background:${CONFIG[k].color}"></i>`;
+  $('stats').innerHTML = kv(dot('plant') + NAMES.plant, n.plant) + kv(dot('herbivore') + NAMES.herbivore, n.herbivore) +
+    kv(dot('carnivore') + NAMES.carnivore, n.carnivore) + kv(dot('virus') + NAMES.virus, n.virus) + kv('Población total', n.plant + n.herbivore + n.carnivore + n.virus) +
+    kv('Velocidad', speed + '×' + (paused ? ' (pausa)' : '')) + kv('Tiempo', fmt(world.time));
+  const s = renderer.selected;
+  if (s && !s.alive) renderer.selected = null;
+  $('sel').innerHTML = s && s.alive ? kv('Tipo', s.poison ? 'Meteorito radiactivo ☢' : NAMES[s.kind]) + kv('ID', '#' + s.id) + kv('Vida', s.hp.toFixed(1) + ' / ' + s.cfg.hpMax) +
+    kv('Tamaño (radio)', s.r.toFixed(1)) + kv('Velocidad', s.speed.toFixed(0) + ' px/s') + kv('Estado', s.state) +
+    kv('Objetivo', s.target ? '#' + s.target.id : '—') + (s.genes ? kv('Edad', s.age.toFixed(0) + ' / ' + s.lifespan.toFixed(0) + ' s') + kv('Genes vel / sens', s.genes.speed.toFixed(2) + ' / ' + s.genes.sense.toFixed(2)) + kv('Vigor', (s.vigor * 100).toFixed(0) + '%') : '') : '<span style="color:var(--mut)">Clic en un organismo. Arrastra: mover · rueda: zoom · Espacio: pausa</span>';
+}
+
+function drawHist() {   // población de cada especie como % de su límite
+  const h = $('hist'), g = h.getContext('2d'), W = h.width, H = h.height, n = Math.max(1, world.history.length - 1); g.clearRect(0, 0, W, H);
+  ['plant', 'herbivore', 'carnivore', 'virus'].forEach((k, i) => {
+    g.strokeStyle = CONFIG[k].color; g.lineWidth = 2; g.beginPath();
+    world.history.forEach((p, j) => { const x = j / n * W, y = H - 4 - p[i] / CONFIG[k].max * (H - 8); j ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke();
+  });
+}
+function frame(now) {
+  const real = Math.min(.1, (now - last) / 1000); last = now;
+  if (!paused) {
+    acc += real * speed; const st = CONFIG.world.step; let n = 0;
+    while (acc >= st && n < CONFIG.world.maxStepsPerFrame) { world.step(st); acc -= st; n++; }
+    if (n >= CONFIG.world.maxStepsPerFrame) acc = 0;
+  }
+  renderer.draw();
+  if ((uiT -= real) <= 0) { uiT = .2; updateUI(); drawHist(); }
+  requestAnimationFrame(frame);
+}
+
+function setPause(p) { paused = p; $('pause').textContent = p ? '▶ Reanudar' : '⏸ Pausa'; updateUI(); }
+$('pause').onclick = () => setPause(!paused);
+$('reset').onclick = reset;
+$('mt').onclick = () => world.meteorShower(); $('sun').onclick = () => world.solarStorm();
+$('tog').onclick = () => $('panel').classList.toggle('hide');
+$('spd').oninput = e => { speed = +e.target.value; $('spdv').textContent = speed + '×'; };
+addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); setPause(!paused); } });
+for (const k in DEBUG) {
+  const l = document.createElement('label'); l.innerHTML = `<input type="checkbox" ${DEBUG[k] ? 'checked' : ''}> ${DEBUG_LABELS[k]}`;
+  l.firstChild.onchange = e => DEBUG[k] = e.target.checked; $('dbg').appendChild(l);
+}
+
+const NAMES = { plant: 'Meteoritos', herbivore: 'Naves humanas', carnivore: 'Aliens', virus: 'Parásitos cósmicos' };
+for (const k in SPECIES) {
+  const d = document.createElement('div'), n = k === 'plant' ? 5 : 1; d.className = 'kv';
+  d.innerHTML = `<span>${NAMES[k]}${k === 'plant' ? ' ×5' : ''}</span><span><button>−</button><button>+</button></span>`;
+  const [m, pl] = d.querySelectorAll('button'); m.onclick = () => world.change(k, -n); pl.onclick = () => world.change(k, n); $('add').appendChild(d);
+}
+// Cámara: arrastrar = mover, rueda = zoom, clic corto = seleccionar
+let drag = null;
+cv.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, cx: renderer.cam.x, cy: renderer.cam.y, moved: false }; cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', e => {
+  if (!drag) return; const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+  if (drag.moved) { renderer.cam.x = drag.cx - dx / renderer.cam.z; renderer.cam.y = drag.cy - dy / renderer.cam.z; }
+});
+cv.addEventListener('pointerup', e => {
+  if (drag && !drag.moved) { const [x, y] = renderer.toWorld(e.clientX, e.clientY); renderer.selected = world.pick(x, y, 6 / renderer.cam.z); updateUI(); }
+  drag = null;
+});
+cv.addEventListener('wheel', e => {
+  e.preventDefault(); const cam = renderer.cam, [wx, wy] = renderer.toWorld(e.clientX, e.clientY);
+  cam.z = U.clamp(cam.z * (e.deltaY < 0 ? 1.12 : 1 / 1.12), .2, 8); cam.x = wx - e.clientX / cam.z; cam.y = wy - e.clientY / cam.z;
+}, { passive: false });
+addEventListener('resize', () => renderer.resize());
+
+reset(); renderer.resize(); requestAnimationFrame(frame);
+</script></body></html>
